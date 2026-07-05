@@ -70,14 +70,12 @@ jobs:
             [ -f "${bin}.exe" ] && cp "${bin}.exe" "$DEST/" || cp "$bin" "$DEST/"
           done
 
-          # Find and copy ALL required DLLs
+          # Copy ALL MSYS2 runtime DLLs (these are what the binary needs)
+          # MSYS2 stores its runtime DLLs in /usr/bin
           cd "$DEST"
-          for exe in fish.exe fish_indent.exe fish_key_reader.exe; do
-            [ -f "$exe" ] || continue
-            echo "=== Dependencies for $exe ==="
-            ldd "$exe" | grep -v "not found" | awk '{print $3}' | while read dll; do
-              [ -f "$dll" ] && cp -n "$dll" "$DEST/" 2>/dev/null && echo "  copied: $(basename $dll)"
-            done
+          echo "=== Copying MSYS2 runtime DLLs ==="
+          for dll in /usr/bin/msys-*.dll /usr/bin/cygwin*.dll; do
+            [ -f "$dll" ] && cp -n "$dll" "$DEST/" && echo "  copied: $(basename $dll)"
           done
 
           # Copy runtime data
@@ -95,8 +93,7 @@ jobs:
           echo "=== Final package ==="
           ls -lh "$DEST/"
           echo "--- DLLs ---"
-          ls "$DEST/"*.dll 2>/dev/null | wc -l
-          echo "DLLs included"
+          ls "$DEST"/msys-*.dll "$DEST"/cygwin*.dll 2>/dev/null || echo "no DLLs found"
 
       - name: Create archive
         shell: msys2 {0}
@@ -114,6 +111,6 @@ jobs:
       - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
-          name: fish-4.0.2-windows-portable.tar.gz
+          name: fish-4.0.2-windows-portable-archive
           path: C:/fish-4.0.2-windows-portable.tar.gz
           retention-days: 30
