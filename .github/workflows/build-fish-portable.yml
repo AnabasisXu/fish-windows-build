@@ -1,0 +1,119 @@
+name: Build Fish 4.0.2 Portable for Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            base-devel
+            git
+            gcc
+            cmake
+            rust
+            pcre2-devel
+            gettext-devel
+            pkgconf
+
+      - name: Download and patch fish 4.0.2
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd /tmp
+          curl -LO https://github.com/fish-shell/fish-shell/releases/download/4.0.2/fish-4.0.2.tar.xz
+          tar xf fish-4.0.2.tar.xz
+          cd fish-4.0.2
+          curl -LO https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/0001-support-cygwin.patch
+          curl -LO https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/0002-patch-dep.patch
+          patch -Np1 -i 0001-support-cygwin.patch
+          patch -Np1 -i 0002-patch-dep.patch
+          cargo update
+
+      - name: Build fish
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd /tmp/fish-4.0.2
+          mkdir -p build && cd build
+          export FISH_BUILD_VERSION=4.0.2-windows-portable
+          cmake .. \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DRust_COMPILER=/usr/bin/rustc \
+            -DRust_CARGO=/usr/bin/cargo \
+            -DRust_CARGO_TARGET=x86_64-pc-cygwin \
+            -DRust_CARGO_HOST_TARGET=x86_64-pc-cygwin \
+            -DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF \
+            -Wno-dev
+          make VERBOSE=1 -j$(nproc)
+
+      - name: Package with DLLs
+        shell: msys2 {0}
+        run: |
+          set -e
+          DEST=/c/fish-portable
+          mkdir -p "$DEST"
+
+          # Copy binaries
+          cd /tmp/fish-4.0.2/build
+          for bin in fish fish_indent fish_key_reader; do
+            [ -f "${bin}.exe" ] && cp "${bin}.exe" "$DEST/" || cp "$bin" "$DEST/"
+          done
+
+          # Find and copy ALL required DLLs
+          cd "$DEST"
+          for exe in fish.exe fish_indent.exe fish_key_reader.exe; do
+            [ -f "$exe" ] || continue
+            echo "=== Dependencies for $exe ==="
+            ldd "$exe" | grep -v "not found" | awk '{print $3}' | while read dll; do
+              [ -f "$dll" ] && cp -n "$dll" "$DEST/" 2>/dev/null && echo "  copied: $(basename $dll)"
+            done
+          done
+
+          # Copy runtime data
+          mkdir -p "$DEST/share/fish"
+          cp -r /tmp/fish-4.0.2/share/completions "$DEST/share/fish/" 2>/dev/null || true
+          cp -r /tmp/fish-4.0.2/share/functions "$DEST/share/fish/" 2>/dev/null || true
+          cp /tmp/fish-4.0.2/share/config.fish "$DEST/share/fish/" 2>/dev/null || true
+
+          # MSYS2 configs
+          mkdir -p "$DEST/etc/fish"
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/msys2.fish -o "$DEST/etc/fish/msys2.fish"
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/msystem.fish -o "$DEST/etc/fish/msystem.fish"
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/config.fish -o "$DEST/etc/fish/config.fish"
+
+          echo "=== Final package ==="
+          ls -lh "$DEST/"
+          echo "--- DLLs ---"
+          ls "$DEST/"*.dll 2>/dev/null | wc -l
+          echo "DLLs included"
+
+      - name: Create archive
+        shell: msys2 {0}
+        run: |
+          cd /c/fish-portable
+          tar czf /c/fish-4.0.2-windows-portable.tar.gz .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-4.0.2-windows-portable
+          path: C:/fish-portable/
+          retention-days: 30
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-4.0.2-windows-portable.tar.gz
+          path: C:/fish-4.0.2-windows-portable.tar.gz
+          retention-days: 30
