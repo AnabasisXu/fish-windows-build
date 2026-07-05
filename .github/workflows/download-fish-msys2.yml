@@ -1,0 +1,56 @@
+name: Download Pre-built Fish from MSYS2
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fish version (leave empty for latest)'
+        required: false
+        default: ''
+
+jobs:
+  download:
+    runs-on: windows-latest
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            fish
+            mingw-w64-x86_64-fish
+
+      - name: Package fish from MSYS2
+        shell: msys2 {0}
+        run: |
+          set -e
+          DEST=/c/fish-portable
+          mkdir -p "$DEST"
+
+          echo "==> Fish version:"
+          fish --version
+
+          echo "==> Copying binaries..."
+          cp /usr/bin/fish.exe "$DEST/" 2>/dev/null || cp /usr/bin/fish "$DEST/"
+          cp /usr/bin/fish_indent.exe "$DEST/" 2>/dev/null || cp /usr/bin/fish_indent "$DEST/"
+          cp /usr/bin/fish_key_reader.exe "$DEST/" 2>/dev/null || cp /usr/bin/fish_key_reader "$DEST/"
+
+          echo "==> Copying runtime data..."
+          mkdir -p "$DEST/share/fish"
+          cp -r /usr/share/fish/completions "$DEST/share/fish/" 2>/dev/null || true
+          cp -r /usr/share/fish/functions "$DEST/share/fish/" 2>/dev/null || true
+          cp /usr/share/fish/config.fish "$DEST/share/fish/" 2>/dev/null || true
+
+          echo "==> Listing package contents:"
+          find "$DEST" -type f | head -20
+          echo "..."
+          find "$DEST" -type f | wc -l
+          echo "files total"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-windows-portable
+          path: C:/fish-portable/
+          retention-days: 30

@@ -1,0 +1,118 @@
+name: Build Fish 4.0.2 for Windows (MSYS2)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            base-devel
+            git
+            gcc
+            cmake
+            rust
+            pcre2-devel
+            gettext-devel
+            pkgconf
+
+      - name: Download and patch fish 4.0.2
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd /tmp
+
+          echo "==> Downloading fish 4.0.2..."
+          curl -LO https://github.com/fish-shell/fish-shell/releases/download/4.0.2/fish-4.0.2.tar.xz
+          tar xf fish-4.0.2.tar.xz
+          cd fish-4.0.2
+
+          echo "==> Downloading Berrysoft Cygwin patches..."
+          curl -LO https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/0001-support-cygwin.patch
+          curl -LO https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/0002-patch-dep.patch
+
+          echo "==> Applying patches..."
+          patch -Np1 -i 0001-support-cygwin.patch
+          patch -Np1 -i 0002-patch-dep.patch
+
+          echo "==> Updating cargo deps..."
+          cargo update
+
+      - name: Build fish
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd /tmp/fish-4.0.2
+          mkdir -p build && cd build
+
+          export FISH_BUILD_VERSION=4.0.2-windows-msys2
+
+          cmake .. \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_INSTALL_SYSCONFDIR=/etc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DRust_COMPILER=/usr/bin/rustc \
+            -DRust_CARGO=/usr/bin/cargo \
+            -DRust_CARGO_TARGET=x86_64-pc-cygwin \
+            -DRust_CARGO_HOST_TARGET=x86_64-pc-cygwin \
+            -DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF \
+            -Wno-dev
+
+          make VERBOSE=1 -j$(nproc)
+
+          echo "==> Build complete, binaries:"
+          ls -la fish.exe fish_indent.exe fish_key_reader.exe 2>/dev/null || ls -la fish fish_indent fish_key_reader 2>/dev/null
+
+      - name: Package binaries
+        shell: msys2 {0}
+        run: |
+          set -e
+          DEST=/c/fish-package
+          mkdir -p "$DEST/usr/bin" "$DEST/usr/share/fish" "$DEST/etc/fish"
+
+          cd /tmp/fish-4.0.2/build
+
+          # Copy binaries (try .exe first, then bare)
+          for bin in fish fish_indent fish_key_reader; do
+            if [ -f "${bin}.exe" ]; then
+              cp "${bin}.exe" "$DEST/usr/bin/"
+            elif [ -f "$bin" ]; then
+              cp "$bin" "$DEST/usr/bin/"
+            else
+              echo "WARNING: $bin not found"
+            fi
+          done
+
+          # Copy runtime data
+          SRCDIR=/tmp/fish-4.0.2
+          for d in completions functions; do
+            [ -d "$SRCDIR/share/$d" ] && cp -r "$SRCDIR/share/$d" "$DEST/usr/share/fish/"
+          done
+          [ -f "$SRCDIR/share/config.fish" ] && cp "$SRCDIR/share/config.fish" "$DEST/usr/share/fish/"
+
+          # MSYS2-specific configs
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/msys2.fish -o "$DEST/etc/fish/msys2.fish"
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/msystem.fish -o "$DEST/etc/fish/msystem.fish"
+          curl -sL https://raw.githubusercontent.com/Berrysoft/fish-msys2/master/config.fish -o "$DEST/etc/fish/config.fish"
+
+          echo "=== Packaged files ==="
+          find "$DEST" -type f | wc -l
+          echo "files total"
+          ls -la "$DEST/usr/bin/"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-4.0.2-windows-msys2
+          path: C:/fish-package/
+          retention-days: 30
